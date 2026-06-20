@@ -757,13 +757,13 @@ const styles = StyleSheet.create({
     borderTopWidth:  1,
     borderTopColor:  COLORS.depleted + '44',
     paddingVertical: 8,
-    gap:             8,
   },
   recDot: {
     width:           10,
     height:          10,
     borderRadius:    5,
     backgroundColor: COLORS.depleted,
+    marginRight:     8,
   },
   recordingText: {
     color:    COLORS.depleted,
@@ -778,7 +778,7 @@ const styles = StyleSheet.create({
     backgroundColor:   COLORS.card,
     borderTopWidth:    1,
     borderTopColor:    COLORS.cardBorder,
-    gap: 8,
+    columnGap:         8,
   },
   input: {
     flex:              1,
@@ -879,8 +879,7 @@ const bubSt = StyleSheet.create({
   },
   progressBubble: {
     backgroundColor: COLORS.surface,
-    borderStyle:     'dashed',
-    borderColor:     COLORS.cardBorder,
+    borderColor:     COLORS.cardBorder + '88',
     borderWidth:     1,
   },
   text: {
