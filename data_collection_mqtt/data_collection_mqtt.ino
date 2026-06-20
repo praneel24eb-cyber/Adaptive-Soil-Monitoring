@@ -34,10 +34,10 @@ const char* WIFI_SSID     = "RVCE";
 const char* EAP_IDENTITY  = "praneelka.cs24";
 const char* EAP_PASSWORD  = "Chikki#16";
 
-// Update this with your laptop's IP address (run check_mqtt_setup.py to find it)
-const char* MQTT_BROKER   = "172.17.10.114";
+// Cloud MQTT broker - bypasses RVCE AP isolation (free public broker)
+const char* MQTT_BROKER   = "broker.emqx.io";
 const int   MQTT_PORT     = 1883;
-const char* MQTT_CLIENT   = "ESP32_SoilMonitor";
+const char* MQTT_CLIENT   = "RVCE_SoilMonitor_ESP32"; // unique ID on shared broker
 
 // ==========================================
 // OBJECTS
