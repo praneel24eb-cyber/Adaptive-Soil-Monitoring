@@ -1,0 +1,47 @@
+# React Native Expo App ignores
+SoilMonitorApp/node_modules/
+SoilMonitorApp/.expo/
+SoilMonitorApp/dist/
+SoilMonitorApp/web-build/
+SoilMonitorApp/expo-env.d.ts
+SoilMonitorApp/.kotlin/
+SoilMonitorApp/*.orig.*
+SoilMonitorApp/*.jks
+SoilMonitorApp/*.p8
+SoilMonitorApp/*.p12
+SoilMonitorApp/*.key
+SoilMonitorApp/*.mobileprovision
+SoilMonitorApp/.metro-health-check*
+SoilMonitorApp/npm-debug.*
+SoilMonitorApp/yarn-debug.*
+SoilMonitorApp/yarn-error.*
+SoilMonitorApp/.env*.local
+SoilMonitorApp/*.tsbuildinfo
+SoilMonitorApp/ios/
+SoilMonitorApp/android/
+SoilMonitorApp/dist-test/
+
+# Python ignores
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS/System ignores
+.DS_Store
+Thumbs.db
+
+# Project temporary/backup files
+*.bak
+*.tmp
+*.log
+*.suo
+*.user
+*.pdb
+*.ilk
+*.obj
