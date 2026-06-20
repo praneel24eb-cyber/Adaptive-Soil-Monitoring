@@ -12,6 +12,7 @@ import { MqttProvider } from './src/services/mqtt';
 import DashboardScreen from './src/screens/DashboardScreen';
 import TrendsScreen from './src/screens/TrendsScreen';
 import AlertsScreen from './src/screens/AlertsScreen';
+import AIChatScreen from './src/screens/AIChatScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import { COLORS } from './src/theme';
 
@@ -81,6 +82,13 @@ export default function App() {
             component={AlertsScreen}
             options={{
               tabBarIcon: ({ focused }) => <TabIcon emoji="🚨" focused={focused} />,
+            }}
+          />
+          <Tab.Screen
+            name="AI Chat"
+            component={AIChatScreen}
+            options={{
+              tabBarIcon: ({ focused }) => <TabIcon emoji="🎙️" focused={focused} />,
             }}
           />
           <Tab.Screen
