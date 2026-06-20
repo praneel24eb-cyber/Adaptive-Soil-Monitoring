@@ -34,8 +34,7 @@ import { useMqtt } from '../services/mqtt';
 import { askGroq, transcribeAudio } from '../services/groq';
 import { COLORS, SIZES, getClassColor } from '../theme';
 
-// Shared AsyncStorage key (also used in SettingsScreen)
-export const STORAGE_KEY_GROQ = '@groq_api_key';
+import { STORAGE_KEY_GROQ } from '../constants';
 
 const { width: SCREEN_W } = Dimensions.get('window');
 const CHART_W = SCREEN_W - 88;
@@ -281,6 +280,7 @@ export default function AIChatScreen() {
   const capturedRef        = useRef([]);
   const lastReadingKeyRef  = useRef(null);
   const pulseAnim          = useRef(new Animated.Value(1)).current;
+  const loopAnimRef        = useRef(null);   // stores the Animated.loop so we can stop it
 
   // ── Load API key whenever screen is focused ────────────────────────────
   useFocusEffect(
@@ -294,14 +294,18 @@ export default function AIChatScreen() {
   // ── Mic pulse animation ────────────────────────────────────────────────
   useEffect(() => {
     if (isRecording) {
-      Animated.loop(
+      loopAnimRef.current = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, { toValue: 1.25, duration: 550, useNativeDriver: true }),
           Animated.timing(pulseAnim, { toValue: 1.0,  duration: 550, useNativeDriver: true }),
         ])
-      ).start();
+      );
+      loopAnimRef.current.start();
     } else {
-      pulseAnim.stopAnimation();
+      if (loopAnimRef.current) {
+        loopAnimRef.current.stop();
+        loopAnimRef.current = null;
+      }
       Animated.timing(pulseAnim, { toValue: 1.0, duration: 150, useNativeDriver: true }).start();
     }
   }, [isRecording]);

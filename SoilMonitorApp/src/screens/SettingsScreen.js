@@ -6,7 +6,7 @@ import { View, ScrollView, Text, TextInput, TouchableOpacity, StyleSheet, Alert 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMqtt } from '../services/mqtt';
 import { COLORS, SIZES } from '../theme';
-import { STORAGE_KEY_GROQ } from './AIChatScreen';
+import { STORAGE_KEY_GROQ } from '../constants';
 
 const SettingsScreen = () => {
   const { brokerIp, brokerPort, status, updateBrokerSettings, connect, history, alerts } = useMqtt();
