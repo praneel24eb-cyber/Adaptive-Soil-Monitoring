@@ -1,0 +1,228 @@
+[
+    {
+        "id": "soil_monitor_tab",
+        "type": "tab",
+        "label": "Soil Monitor Pipeline",
+        "disabled": false,
+        "info": "Pipeline to ingest ESP32 MQTT readings and alerts, format them, and store them in InfluxDB."
+    },
+    {
+        "id": "local_mqtt_broker",
+        "type": "mqtt-broker",
+        "name": "Local Mosquitto",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "NodeRed_SoilPipeline",
+        "autoConnect": true,
+        "usetls": false,
+        "compatmode": false,
+        "keepalive": "60",
+        "cleansession": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": ""
+    },
+    {
+        "id": "local_influxdb_config",
+        "type": "influxdb",
+        "hostname": "localhost",
+        "port": "8086",
+        "protocol": "http",
+        "database": "soil_monitor",
+        "name": "Local InfluxDB v2",
+        "usetls": false,
+        "org": "my-org",
+        "token": "YOUR_INFLUXDB_API_TOKEN",
+        "version": "2.0"
+    },
+    {
+        "id": "mqtt_in_readings",
+        "type": "mqtt in",
+        "z": "soil_monitor_tab",
+        "name": "Subscribe readings",
+        "topic": "soil/readings",
+        "qos": "0",
+        "datatype": "utf8",
+        "broker": "local_mqtt_broker",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 150,
+        "y": 120,
+        "wires": [
+            [
+                "json_parse_readings"
+            ]
+        ]
+    },
+    {
+        "id": "json_parse_readings",
+        "type": "json",
+        "z": "soil_monitor_tab",
+        "name": "Parse JSON",
+        "property": "payload",
+        "action": "",
+        "pretty": false,
+        "x": 370,
+        "y": 120,
+        "wires": [
+            [
+                "func_format_readings"
+            ]
+        ]
+    },
+    {
+        "id": "func_format_readings",
+        "type": "function",
+        "z": "soil_monitor_tab",
+        "name": "Format Readings",
+        "func": "// Extract numeric and boolean fields for InfluxDB\nvar data = msg.payload;\n\nvar fields = {\n    N: parseInt(data.N) || 0,\n    P: parseInt(data.P) || 0,\n    K: parseInt(data.K) || 0,\n    moisture: parseFloat(data.moisture) || 0.0,\n    temp: parseFloat(data.temp) || 0.0,\n    cusum: parseFloat(data.cusum) || 0.0,\n    drift: data.drift ? 1 : 0\n};\n\nvar tags = {\n    fertility_class: data.class || \"Unknown\"\n};\n\nmsg.payload = [fields, tags];\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 580,
+        "y": 120,
+        "wires": [
+            [
+                "influx_out_readings",
+                "debug_readings"
+            ]
+        ]
+    },
+    {
+        "id": "influx_out_readings",
+        "type": "influxdb out",
+        "z": "soil_monitor_tab",
+        "influxdb": "local_influxdb_config",
+        "name": "Store Readings",
+        "measurement": "readings",
+        "precision": "",
+        "retentionPolicy": "",
+        "database": "database",
+        "precisionV18FluxV20": "ms",
+        "retentionPolicyV18FluxV20": "",
+        "org": "my-org",
+        "bucket": "soil_monitor",
+        "x": 820,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "debug_readings",
+        "type": "debug",
+        "z": "soil_monitor_tab",
+        "name": "Debug readings",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 820,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "mqtt_in_alerts",
+        "type": "mqtt in",
+        "z": "soil_monitor_tab",
+        "name": "Subscribe alerts",
+        "topic": "soil/alerts",
+        "qos": "0",
+        "datatype": "utf8",
+        "broker": "local_mqtt_broker",
+        "nl": false,
+        "rap": true,
+        "rh": 0,
+        "inputs": 0,
+        "x": 140,
+        "y": 240,
+        "wires": [
+            [
+                "json_parse_alerts"
+            ]
+        ]
+    },
+    {
+        "id": "json_parse_alerts",
+        "type": "json",
+        "z": "soil_monitor_tab",
+        "name": "Parse JSON",
+        "property": "payload",
+        "action": "",
+        "pretty": false,
+        "x": 370,
+        "y": 240,
+        "wires": [
+            [
+                "func_format_alerts",
+                "debug_alerts"
+            ]
+        ]
+    },
+    {
+        "id": "func_format_alerts",
+        "type": "function",
+        "z": "soil_monitor_tab",
+        "name": "Format Alerts",
+        "func": "var data = msg.payload;\n\nvar fields = {\n    cusum: parseFloat(data.cusum) || 0.0\n};\n\nvar tags = {\n    alert_type: data.type || \"DEPLETION_DRIFT\"\n};\n\nmsg.payload = [fields, tags];\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 570,
+        "y": 240,
+        "wires": [
+            [
+                "influx_out_alerts"
+            ]
+        ]
+    },
+    {
+        "id": "influx_out_alerts",
+        "type": "influxdb out",
+        "z": "soil_monitor_tab",
+        "influxdb": "local_influxdb_config",
+        "name": "Store Alerts",
+        "measurement": "alerts",
+        "precision": "",
+        "retentionPolicy": "",
+        "database": "database",
+        "precisionV18FluxV20": "ms",
+        "retentionPolicyV18FluxV20": "",
+        "org": "my-org",
+        "bucket": "soil_monitor",
+        "x": 810,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "debug_alerts",
+        "type": "debug",
+        "z": "soil_monitor_tab",
+        "name": "Debug alerts",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 570,
+        "y": 300,
+        "wires": []
+    }
+]
