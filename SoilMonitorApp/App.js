@@ -1,6 +1,7 @@
 // ─── App.js ───────────────────────────────────────────────────────────
 // Root application component.
-// Sets up bottom tab navigation and wraps everything in MqttProvider.
+// Sets up bottom tab navigation and wraps everything in FirebaseProvider
+// (exported as MqttProvider alias for backward compatibility).
 
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
@@ -8,7 +9,7 @@ import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { View, Text } from 'react-native';
 
-import { MqttProvider } from './src/services/mqtt';
+import { MqttProvider } from './src/services/firebaseService';
 import DashboardScreen from './src/screens/DashboardScreen';
 import TrendsScreen from './src/screens/TrendsScreen';
 import AlertsScreen from './src/screens/AlertsScreen';
