@@ -22,10 +22,19 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "plugins": [
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow Soil Monitor to access your microphone for voice AI commands."
+        }
+      ]
+    ],
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "77c8627d-8642-4bbb-aec7-9c53a444c226"
       }
-    }
+    },
+    "owner": "praneelka"
   }
 }
