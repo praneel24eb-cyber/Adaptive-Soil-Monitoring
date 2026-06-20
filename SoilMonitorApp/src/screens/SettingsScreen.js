@@ -1,15 +1,35 @@
 // ─── Settings Screen ──────────────────────────────────────────────────
-// Configure MQTT broker IP/port, test connection, and view app info.
+// Configure MQTT broker IP/port, test connection, Groq API key, and view app info.
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, ScrollView, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMqtt } from '../services/mqtt';
 import { COLORS, SIZES } from '../theme';
+import { STORAGE_KEY_GROQ } from './AIChatScreen';
 
 const SettingsScreen = () => {
   const { brokerIp, brokerPort, status, updateBrokerSettings, connect, history, alerts } = useMqtt();
-  const [ip, setIp]     = useState(brokerIp);
-  const [port, setPort] = useState(brokerPort);
+  const [ip, setIp]           = useState(brokerIp);
+  const [port, setPort]       = useState(brokerPort);
+  const [groqKey, setGroqKey] = useState('');
+
+  // Load stored Groq key on mount
+  useEffect(() => {
+    AsyncStorage.getItem(STORAGE_KEY_GROQ).then(k => {
+      if (k) setGroqKey(k);
+    });
+  }, []);
+
+  const handleSaveGroqKey = async () => {
+    const trimmed = groqKey.trim();
+    if (!trimmed) {
+      Alert.alert('Error', 'API key cannot be empty.');
+      return;
+    }
+    await AsyncStorage.setItem(STORAGE_KEY_GROQ, trimmed);
+    Alert.alert('Saved', 'Groq API key saved successfully. Switch to the 🎙️ AI tab to use it.');
+  };
 
   const handleSave = async () => {
     if (!ip.trim()) {
@@ -97,6 +117,29 @@ const SettingsScreen = () => {
           <Text style={styles.statLabel}>Alerts logged</Text>
           <Text style={styles.statValue}>{alerts.length}</Text>
         </View>
+      </View>
+
+      {/* Groq API Key */}
+      <View style={styles.card}>
+        <Text style={styles.sectionLabel}>Groq AI</Text>
+        <Text style={styles.inputLabel}>Groq API Key</Text>
+        <TextInput
+          style={styles.input}
+          value={groqKey}
+          onChangeText={setGroqKey}
+          placeholder="gsk_..."
+          placeholderTextColor={COLORS.textMuted}
+          autoCorrect={false}
+          autoCapitalize="none"
+          secureTextEntry={false}
+        />
+        <Text style={styles.hint}>
+          Get your free key at console.groq.com → API Keys.{'\n'}
+          Powers voice transcription and AI Q&A in the 🎙️ Chat tab.
+        </Text>
+        <TouchableOpacity style={styles.saveBtn} onPress={handleSaveGroqKey}>
+          <Text style={styles.saveBtnText}>Save API Key</Text>
+        </TouchableOpacity>
       </View>
 
       {/* About */}
