@@ -30,12 +30,12 @@
 // ==========================================
 // WIFI & MQTT CREDENTIALS
 // ==========================================
-const char* WIFI_SSID     = "Praneelka";   // Phone hotspot name
-const char* WIFI_PASSWORD = "praneel16";   // Phone hotspot password
+const char* WIFI_SSID     = "Raghottam's S24";   // Phone hotspot name
+const char* WIFI_PASSWORD = "12347890";   // Phone hotspot password
 
 // Laptop's IP on the hotspot network — run ipconfig on laptop after
 // connecting to the Praneelka hotspot, then update this value & re-upload
-const char* MQTT_BROKER   = "10.237.146.29"; // Laptop IP on Praneelka hotspot
+const char* MQTT_BROKER   = "10.150.195.29"; // Laptop IP on Praneelka hotspot
 const int   MQTT_PORT     = 1883;
 const char* MQTT_CLIENT   = "RVCE_SoilMonitor_ESP32";
 
