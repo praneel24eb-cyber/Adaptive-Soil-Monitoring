@@ -2,9 +2,9 @@
 // Voice-enabled AI assistant tab for soil monitoring.
 //
 // Voice commands detected:
-//   "Start monitoring"  → captures 5 fresh MQTT readings
+//   "Start monitoring"  → captures 5 fresh Firebase readings
 //   "End monitoring"    → cancels active monitoring session
-//   "Analyze data"      → renders inline SVG charts in the chat
+//   "Analyze data"      → generates a downloadable PDF soil report
 //   anything else       → sent to Groq llama-3.3-70b with soil context
 //
 // Voice input: hold mic button → Groq Whisper transcription → command executed
@@ -12,113 +12,226 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TextInput,
-  TouchableOpacity,
-  Pressable,
-  KeyboardAvoidingView,
-  Platform,
-  ActivityIndicator,
-  Dimensions,
-  Alert,
-  Animated,
+  View, Text, StyleSheet, FlatList, TextInput,
+  TouchableOpacity, Pressable, KeyboardAvoidingView,
+  Platform, ActivityIndicator, Dimensions, Alert, Animated,
 } from 'react-native';
-import { Audio } from 'expo-av';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import Svg, { Polyline, Line, Circle as SvgCircle, Text as SvgText } from 'react-native-svg';
+import { Audio }        from 'expo-av';
+import * as Print      from 'expo-print';
+import * as Sharing    from 'expo-sharing';
+import AsyncStorage    from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-import { useMqtt } from '../services/mqtt';
+import { useMqtt }     from '../services/mqtt';
 import { askGroq, transcribeAudio } from '../services/groq';
 import { COLORS, SIZES, getClassColor } from '../theme';
-
 import { STORAGE_KEY_GROQ } from '../constants';
 
 const { width: SCREEN_W } = Dimensions.get('window');
-const CHART_W = SCREEN_W - 88;
-const CHART_H = 75;
 
-// ─── Command detection ────────────────────────────────────────────────────
-
+// ─── Command detection ─────────────────────────────────────────────────────
 const detectCommand = (text) => {
   const t = text.toLowerCase();
-  if (/\b(start|begin)\s*(monitor|monitoring)/i.test(t)) return 'START_MONITORING';
+  if (/\b(start|begin)\s*(monitor|monitoring)/i.test(t))  return 'START_MONITORING';
   if (/\b(end|stop|finish|halt)\s*(monitor|monitoring)/i.test(t)) return 'END_MONITORING';
-  if (/\b(analyze|analyse|show)\s*(data|graph|chart|trend)/i.test(t)) return 'ANALYZE_DATA';
+  if (/\b(analyze|analyse|show|generate|create|make)\s*(data|graph|chart|trend|report|pdf)/i.test(t)) return 'ANALYZE_DATA';
   return 'ASK_AI';
 };
 
-// ─── Inline SVG Mini Chart ────────────────────────────────────────────────
+// ─── PDF HTML builder ──────────────────────────────────────────────────────
+const buildPDFHtml = (history, latest, aiInsights) => {
+  const data   = history.slice(-20);
+  const now    = new Date();
+  const dateStr = now.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+  const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
-const MiniChart = ({ data, color, label, unit }) => {
-  if (!data || data.length < 2) return null;
+  const avg = arr => arr.length ? (arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(1) : '—';
+  const Ns  = data.map(r => r.N).filter(v => v != null);
+  const Ps  = data.map(r => r.P).filter(v => v != null);
+  const Ks  = data.map(r => r.K).filter(v => v != null);
+  const Ms  = data.map(r => r.moisture).filter(v => v != null);
+  const Ts  = data.map(r => r.temp).filter(v => v != null);
 
-  const vals   = data.map(v => (typeof v === 'number' && !isNaN(v) ? v : 0));
-  const minVal = Math.min(...vals);
-  const maxVal = Math.max(...vals, minVal + 1);
-  const range  = maxVal - minVal || 1;
-  const step   = CHART_W / (vals.length - 1);
+  // SVG chart builder
+  const buildChart = (values, color) => {
+    if (!values || values.length < 2) {
+      return `<text x="250" y="40" text-anchor="middle" fill="#d1d5db" font-size="12">No data</text>`;
+    }
+    const w = 500, h = 70, pad = 10;
+    const min   = Math.min(...values);
+    const max   = Math.max(...values, min + 0.1);
+    const range = max - min;
+    const cw = w - 2 * pad, ch = h - 2 * pad;
 
-  const points = vals
-    .map((v, i) => {
-      const x = i * step;
-      const y = CHART_H - ((v - minVal) / range) * (CHART_H - 14) - 7;
+    const pts = values.map((v, i) => {
+      const x = pad + (i / (values.length - 1)) * cw;
+      const y = pad + (1 - (v - min) / range) * ch;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(' ');
+    }).join(' ');
 
-  const lastX = (vals.length - 1) * step;
-  const lastY = CHART_H - ((vals[vals.length - 1] - minVal) / range) * (CHART_H - 14) - 7;
-  const latest = vals[vals.length - 1];
+    const grids = [0, 0.5, 1].map(f => {
+      const y = (pad + f * ch).toFixed(1);
+      return `<line x1="${pad}" y1="${y}" x2="${w - pad}" y2="${y}" stroke="#e5e7eb" stroke-width="1"/>`;
+    }).join('');
 
-  return (
-    <View style={chartSt.wrapper}>
-      <View style={chartSt.row}>
-        <Text style={chartSt.label}>{label}</Text>
-        <Text style={[chartSt.value, { color }]}>
-          {latest % 1 === 0 ? latest : latest.toFixed(1)} {unit}
-        </Text>
-      </View>
-      <Svg width={CHART_W} height={CHART_H}>
-        {/* Grid lines */}
-        {[0, 0.5, 1].map((frac, i) => (
-          <Line
-            key={i}
-            x1={0}
-            y1={7 + frac * (CHART_H - 14)}
-            x2={CHART_W}
-            y2={7 + frac * (CHART_H - 14)}
-            stroke={COLORS.surface}
-            strokeWidth={1}
-          />
-        ))}
-        {/* Min/Max labels */}
-        <SvgText x={2} y={12} fontSize={8} fill={COLORS.textMuted}>
-          {maxVal.toFixed(0)}
-        </SvgText>
-        <SvgText x={2} y={CHART_H - 1} fontSize={8} fill={COLORS.textMuted}>
-          {minVal.toFixed(0)}
-        </SvgText>
-        {/* Data line */}
-        <Polyline
-          points={points}
-          fill="none"
-          stroke={color}
-          strokeWidth={2}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-        />
-        {/* Latest value dot */}
-        <SvgCircle cx={lastX} cy={lastY} r={4} fill={color} />
-      </Svg>
-    </View>
-  );
+    const lv = values[values.length - 1];
+    const lx = (pad + cw).toFixed(1);
+    const ly = (pad + (1 - (lv - min) / range) * ch).toFixed(1);
+
+    return `
+      ${grids}
+      <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2.5"
+        stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="${lx}" cy="${ly}" r="4" fill="${color}"/>
+      <text x="6" y="16" font-size="9" fill="#9ca3af">${max.toFixed(0)}</text>
+      <text x="6" y="${h - 3}" font-size="9" fill="#9ca3af">${min.toFixed(0)}</text>`;
+  };
+
+  const fcl    = latest?.class ?? 'Unknown';
+  const fColor = { 'Nutrient-Rich': '#16a34a', Moderate: '#d97706', Depleted: '#dc2626' }[fcl] ?? '#6b7280';
+  const fBg    = { 'Nutrient-Rich': '#f0fdf4', Moderate: '#fffbeb', Depleted: '#fef2f2' }[fcl] ?? '#f9fafb';
+
+  const tableRows = data.slice(-10).reverse().map((r, i) => {
+    const t = r.timestamp
+      ? new Date(r.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      : '—';
+    const bg  = i % 2 === 0 ? '#fff' : '#f9fafb';
+    const cc  = { 'Nutrient-Rich': '#16a34a', Moderate: '#d97706', Depleted: '#dc2626' }[r.class] ?? '#6b7280';
+    return `<tr style="background:${bg}">
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;color:#374151">${t}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;color:#2563eb;font-weight:700">${r.N ?? '—'}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;color:#7c3aed;font-weight:700">${r.P ?? '—'}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;color:#b45309;font-weight:700">${r.K ?? '—'}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;color:#0891b2">${r.moisture != null ? Number(r.moisture).toFixed(1) : '—'}%</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;color:#dc2626">${r.temp != null ? Number(r.temp).toFixed(1) : '—'}°C</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #f1f5f9;color:${cc};font-weight:700">${r.class ?? '—'}</td>
+    </tr>`;
+  }).join('');
+
+  const latestTime = latest?.timestamp
+    ? new Date(latest.timestamp).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })
+    : '—';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Soil Health Report</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,'Segoe UI',Arial,sans-serif; background:#fff; color:#111827; padding:40px 48px; font-size:13px; }
+.hdr { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:28px; padding-bottom:18px; border-bottom:3px solid #16a34a; }
+.hdr h1 { font-size:26px; font-weight:900; }
+.hdr h1 span { color:#16a34a; }
+.hdr p  { color:#6b7280; font-size:11px; margin-top:2px; }
+.meta   { text-align:right; color:#6b7280; font-size:11px; line-height:1.9; }
+.sec    { margin:22px 0 0; }
+.sec-t  { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:2px; color:#9ca3af; margin-bottom:12px; padding-bottom:6px; border-bottom:1px solid #f1f5f9; }
+.g3     { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.g2     { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
+.card   { background:#f9fafb; border:1px solid #f1f5f9; border-radius:10px; padding:14px; text-align:center; }
+.card .l{ font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#9ca3af; margin-bottom:3px; }
+.card .v{ font-size:22px; font-weight:900; }
+.card .u{ font-size:10px; color:#9ca3af; margin-top:1px; }
+.fbanner{ border-radius:12px; padding:18px 24px; text-align:center; background:${fBg}; border:2px solid ${fColor}44; margin-bottom:4px; }
+.fbanner .l{ font-size:11px; text-transform:uppercase; letter-spacing:2px; color:${fColor}; opacity:.75; }
+.fbanner .c{ font-size:30px; font-weight:900; color:${fColor}; margin-top:4px; }
+.ch-blk { margin-bottom:12px; }
+.ch-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:3px; }
+.ch-n   { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:#374151; }
+.ch-v   { font-size:11px; color:#6b7280; }
+svg.ch  { width:100%; height:70px; background:#f9fafb; border-radius:6px; display:block; }
+table   { width:100%; border-collapse:collapse; font-size:11px; }
+thead th{ background:#111827; color:#fff; padding:8px 10px; text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; }
+.ins    { background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:16px; font-size:12px; line-height:1.8; color:#166534; white-space:pre-wrap; word-break:break-word; }
+.foot   { margin-top:30px; padding-top:15px; border-top:1px solid #f1f5f9; text-align:center; font-size:10px; color:#d1d5db; }
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div>
+    <h1>🌱 Soil Health <span>Report</span></h1>
+    <p>RVCE IoT Adaptive Soil Monitoring System</p>
+  </div>
+  <div class="meta">
+    <div><strong>Date:</strong> ${dateStr}</div>
+    <div><strong>Time:</strong> ${timeStr}</div>
+    <div><strong>Samples:</strong> ${data.length} readings</div>
+    <div><strong>Sensor:</strong> ESP32 + NPK + DS18B20</div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sec-t">Soil Fertility Status</div>
+  <div class="fbanner">
+    <div class="l">Current ML Classification</div>
+    <div class="c">${fcl}</div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sec-t">Latest Reading · ${latestTime}</div>
+  <div class="g3">
+    <div class="card"><div class="l">Nitrogen</div><div class="v" style="color:#2563eb">${latest?.N ?? '—'}</div><div class="u">mg/kg</div></div>
+    <div class="card"><div class="l">Phosphorus</div><div class="v" style="color:#7c3aed">${latest?.P ?? '—'}</div><div class="u">mg/kg</div></div>
+    <div class="card"><div class="l">Potassium</div><div class="v" style="color:#b45309">${latest?.K ?? '—'}</div><div class="u">mg/kg</div></div>
+    <div class="card"><div class="l">Moisture</div><div class="v" style="color:#0891b2">${latest?.moisture != null ? Number(latest.moisture).toFixed(1) : '—'}</div><div class="u">%</div></div>
+    <div class="card"><div class="l">Temperature</div><div class="v" style="color:#dc2626">${latest?.temp != null ? Number(latest.temp).toFixed(2) : '—'}</div><div class="u">°C</div></div>
+    <div class="card"><div class="l">CUSUM Score</div><div class="v" style="color:#6b7280">${latest?.cusum != null ? Number(latest.cusum).toFixed(2) : '0.00'}</div><div class="u">drift index</div></div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sec-t">Trend Analysis · Last ${data.length} Readings</div>
+  <div class="ch-blk">
+    <div class="ch-row"><span class="ch-n">Nitrogen</span><span class="ch-v">avg ${avg(Ns)} mg/kg</span></div>
+    <svg class="ch" viewBox="0 0 500 70" preserveAspectRatio="none">${buildChart(Ns,'#2563eb')}</svg>
+  </div>
+  <div class="ch-blk">
+    <div class="ch-row"><span class="ch-n">Phosphorus</span><span class="ch-v">avg ${avg(Ps)} mg/kg</span></div>
+    <svg class="ch" viewBox="0 0 500 70" preserveAspectRatio="none">${buildChart(Ps,'#7c3aed')}</svg>
+  </div>
+  <div class="ch-blk">
+    <div class="ch-row"><span class="ch-n">Potassium</span><span class="ch-v">avg ${avg(Ks)} mg/kg</span></div>
+    <svg class="ch" viewBox="0 0 500 70" preserveAspectRatio="none">${buildChart(Ks,'#b45309')}</svg>
+  </div>
+  <div class="g2">
+    <div class="ch-blk">
+      <div class="ch-row"><span class="ch-n">Moisture</span><span class="ch-v">avg ${avg(Ms)}%</span></div>
+      <svg class="ch" viewBox="0 0 500 70" preserveAspectRatio="none">${buildChart(Ms,'#0891b2')}</svg>
+    </div>
+    <div class="ch-blk">
+      <div class="ch-row"><span class="ch-n">Temperature</span><span class="ch-v">avg ${avg(Ts)}°C</span></div>
+      <svg class="ch" viewBox="0 0 500 70" preserveAspectRatio="none">${buildChart(Ts,'#dc2626')}</svg>
+    </div>
+  </div>
+</div>
+
+${aiInsights ? `
+<div class="sec">
+  <div class="sec-t">AI Analysis &amp; Recommendations (Groq AI)</div>
+  <div class="ins">${aiInsights.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+</div>` : ''}
+
+<div class="sec">
+  <div class="sec-t">Historical Data · Last 10 Readings</div>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th><th>N (mg/kg)</th><th>P (mg/kg)</th><th>K (mg/kg)</th>
+        <th>Moisture</th><th>Temp</th><th>Class</th>
+      </tr>
+    </thead>
+    <tbody>${tableRows}</tbody>
+  </table>
+</div>
+
+<div class="foot">Generated by Soil Monitor App · RVCE IoT Project · ESP32 Adaptive Soil Monitoring System</div>
+</body>
+</html>`;
 };
 
-// ─── Readings Card (inside chat bubble) ─────────────────────────────────
-
+// ─── Readings Card (inside chat bubble) ───────────────────────────────────
 const ReadingsCard = ({ readings }) => (
   <View style={readSt.container}>
     {readings.map((r, i) => (
@@ -129,12 +242,10 @@ const ReadingsCard = ({ readings }) => (
         <View style={readSt.dataCol}>
           <Text style={readSt.time}>
             {r.receivedAt
-              ? new Date(r.receivedAt).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })
-              : '—'}
+              ? new Date(r.receivedAt).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' })
+              : r.timestamp
+                ? new Date(r.timestamp).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' })
+                : '—'}
           </Text>
           <View style={readSt.npkRow}>
             <Text style={[readSt.npk, { color: COLORS.nitrogen }]}>N:{r.N ?? '—'}</Text>
@@ -154,38 +265,9 @@ const ReadingsCard = ({ readings }) => (
   </View>
 );
 
-// ─── Charts Card (inside chat bubble) ────────────────────────────────────
-
-const ChartsCard = ({ history }) => {
-  const data = history.slice(-20);
-
-  if (data.length < 2) {
-    return (
-      <View style={chartSt.emptyBox}>
-        <Text style={chartSt.emptyText}>
-          📊 Not enough data yet. Connect to MQTT and collect some readings.
-        </Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={chartSt.card}>
-      <Text style={chartSt.cardTitle}>📊 Soil Analytics — last {data.length} readings</Text>
-      <MiniChart data={data.map(r => r.N)}        color={COLORS.nitrogen}    label="Nitrogen"    unit="mg/kg" />
-      <MiniChart data={data.map(r => r.P)}        color={COLORS.phosphorus}  label="Phosphorus"  unit="mg/kg" />
-      <MiniChart data={data.map(r => r.K)}        color={COLORS.potassium}   label="Potassium"   unit="mg/kg" />
-      <MiniChart data={data.map(r => r.moisture)} color={COLORS.moisture}    label="Moisture"    unit="%" />
-      <MiniChart data={data.map(r => r.temp)}     color={COLORS.temperature} label="Temperature" unit="°C" />
-    </View>
-  );
-};
-
-// ─── Message Bubble ───────────────────────────────────────────────────────
-
+// ─── Message Bubble ────────────────────────────────────────────────────────
 const MessageBubble = React.memo(({ message }) => {
   const isUser = message.role === 'user';
-
   return (
     <View style={[bubSt.wrapper, isUser ? bubSt.userWrapper : bubSt.aiWrapper]}>
       {!isUser && (
@@ -196,21 +278,15 @@ const MessageBubble = React.memo(({ message }) => {
       <View
         style={[
           bubSt.bubble,
-          isUser ? bubSt.userBubble : bubSt.aiBubble,
+          isUser  ? bubSt.userBubble     : bubSt.aiBubble,
           message.type === 'error'    && bubSt.errorBubble,
           message.type === 'progress' && bubSt.progressBubble,
         ]}
       >
-        {/* Body */}
         {message.type === 'readings' ? (
           <>
             <Text style={[bubSt.text, bubSt.aiText]}>{message.text}</Text>
             <ReadingsCard readings={message.readings} />
-          </>
-        ) : message.type === 'charts' ? (
-          <>
-            <Text style={[bubSt.text, bubSt.aiText]}>{message.text}</Text>
-            <ChartsCard history={message.history} />
           </>
         ) : (
           <Text
@@ -224,13 +300,8 @@ const MessageBubble = React.memo(({ message }) => {
             {message.text}
           </Text>
         )}
-
-        {/* Timestamp */}
         <Text style={[bubSt.ts, isUser && bubSt.tsUser]}>
-          {message.timestamp?.toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
+          {message.timestamp?.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' })}
         </Text>
       </View>
       {isUser && (
@@ -242,15 +313,13 @@ const MessageBubble = React.memo(({ message }) => {
   );
 });
 
-// ─── AI Chat Screen ───────────────────────────────────────────────────────
-
+// ─── AI Chat Screen ────────────────────────────────────────────────────────
 export default function AIChatScreen() {
   const { latestReading, history, status } = useMqtt();
 
-  // ── State ──────────────────────────────────────────────────────────────
   const [messages, setMessages] = useState([
     {
-      id: 'welcome',
+      id:   'welcome',
       role: 'ai',
       type: 'text',
       text:
@@ -258,7 +327,7 @@ export default function AIChatScreen() {
         '🎙️ Hold the mic button and speak, or type:\n\n' +
         '  • "Start monitoring" — capture 5 live readings\n' +
         '  • "End monitoring"   — stop capturing\n' +
-        '  • "Analyze data"     — show inline charts\n\n' +
+        '  • "Analyze data"     — generate PDF report 📄\n\n' +
         '  • "What crops can I grow?"\n' +
         '  • "Is my soil healthy?"\n' +
         '  • "Should I add fertilizer?"\n\n' +
@@ -267,22 +336,21 @@ export default function AIChatScreen() {
     },
   ]);
 
-  const [inputText, setInputText]     = useState('');
-  const [isRecording, setIsRecording] = useState(false);
-  const [isLoading, setIsLoading]     = useState(false);
+  const [inputText, setInputText]       = useState('');
+  const [isRecording, setIsRecording]   = useState(false);
+  const [isLoading, setIsLoading]       = useState(false);
   const [isMonitoring, setIsMonitoring] = useState(false);
-  const [groqApiKey, setGroqApiKey]   = useState('');
+  const [groqApiKey, setGroqApiKey]     = useState('');
 
-  // ── Refs ───────────────────────────────────────────────────────────────
-  const recordingRef       = useRef(null);
-  const flatListRef        = useRef(null);
-  const isMonitoringRef    = useRef(false);    // sync ref for useEffect
-  const capturedRef        = useRef([]);
-  const lastReadingKeyRef  = useRef(null);
-  const pulseAnim          = useRef(new Animated.Value(1)).current;
-  const loopAnimRef        = useRef(null);   // stores the Animated.loop so we can stop it
+  const recordingRef      = useRef(null);
+  const flatListRef       = useRef(null);
+  const isMonitoringRef   = useRef(false);
+  const capturedRef       = useRef([]);
+  const lastReadingKeyRef = useRef(null);
+  const pulseAnim         = useRef(new Animated.Value(1)).current;
+  const loopAnimRef       = useRef(null);
 
-  // ── Load API key whenever screen is focused ────────────────────────────
+  // ── Load API key on focus ───────────────────────────────────────────────
   useFocusEffect(
     useCallback(() => {
       AsyncStorage.getItem(STORAGE_KEY_GROQ).then(key => {
@@ -291,7 +359,7 @@ export default function AIChatScreen() {
     }, [])
   );
 
-  // ── Mic pulse animation ────────────────────────────────────────────────
+  // ── Mic pulse animation ─────────────────────────────────────────────────
   useEffect(() => {
     if (isRecording) {
       loopAnimRef.current = Animated.loop(
@@ -302,19 +370,18 @@ export default function AIChatScreen() {
       );
       loopAnimRef.current.start();
     } else {
-      if (loopAnimRef.current) {
-        loopAnimRef.current.stop();
-        loopAnimRef.current = null;
-      }
+      loopAnimRef.current?.stop();
+      loopAnimRef.current = null;
       Animated.timing(pulseAnim, { toValue: 1.0, duration: 150, useNativeDriver: true }).start();
     }
   }, [isRecording]);
 
-  // ── Watch for fresh MQTT readings when monitoring ─────────────────────
+  // ── Watch for Firebase readings during monitoring ───────────────────────
   useEffect(() => {
     if (!isMonitoringRef.current || !latestReading) return;
 
     const key =
+      latestReading.timestamp?.toString() ??
       latestReading.receivedAt?.toString() ??
       `${latestReading.N}_${latestReading.P}_${latestReading.K}_${Date.now()}`;
 
@@ -324,7 +391,6 @@ export default function AIChatScreen() {
     capturedRef.current = [...capturedRef.current, latestReading];
     const count = capturedRef.current.length;
 
-    // Update progress message in place
     setMessages(prev =>
       prev.map(m =>
         m.id === 'monitoring-progress'
@@ -342,44 +408,118 @@ export default function AIChatScreen() {
       setMessages(prev => [
         ...prev.filter(m => m.id !== 'monitoring-progress'),
         {
-          id: `readings-${Date.now()}`,
-          role: 'ai',
-          type: 'readings',
-          text: '✅ Monitoring complete! Here are your 5 fresh readings:',
+          id:        `readings-${Date.now()}`,
+          role:      'ai',
+          type:      'readings',
+          text:      '✅ Monitoring complete! Here are your 5 fresh readings:',
           readings,
           timestamp: new Date(),
         },
       ]);
-
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 150);
     }
   }, [latestReading]);
 
-  // ─── Helper: append message ─────────────────────────────────────────────
+  // ── Helper: append message ─────────────────────────────────────────────
   const addMessage = useCallback((msg) => {
     setMessages(prev => [...prev, msg]);
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 120);
   }, []);
 
-  // ─── Command executor ────────────────────────────────────────────────────
+  // ── PDF generation helper ──────────────────────────────────────────────
+  const generateAndSharePDF = useCallback(async () => {
+    if (history.length < 2) {
+      addMessage({
+        id: `ai-${Date.now()}`, role: 'ai', type: 'error',
+        text: '📊 Not enough data yet. Collect at least 2 readings first.',
+        timestamp: new Date(),
+      });
+      return;
+    }
+
+    const progressId = `pdf-${Date.now()}`;
+    setMessages(prev => [...prev, {
+      id: progressId, role: 'ai', type: 'progress',
+      text: '📄 Generating soil health report…',
+      timestamp: new Date(),
+    }]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 120);
+    setIsLoading(true);
+
+    try {
+      // Get Groq AI insights if key available
+      let aiInsights = '';
+      if (groqApiKey) {
+        try {
+          aiInsights = await askGroq(
+            'Provide a structured soil health analysis report with these sections:\n' +
+            '1) HEALTH ASSESSMENT — overall soil health based on N/P/K levels\n' +
+            '2) KEY FINDINGS — 2-3 specific observations from the data\n' +
+            '3) RECOMMENDED CROPS — 3-4 crops suited to these conditions\n' +
+            '4) FERTILIZER RECOMMENDATIONS — specific fertilizers and quantities\n' +
+            '5) ACTION PLAN — immediate steps to improve soil fertility\n' +
+            'Be specific, practical, and concise.',
+            latestReading, history, groqApiKey
+          );
+        } catch (e) {
+          console.warn('[PDF] Could not fetch AI insights:', e.message);
+        }
+      }
+
+      // Build and print PDF
+      const html = buildPDFHtml(history, latestReading, aiInsights);
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+
+      setMessages(prev => prev.filter(m => m.id !== progressId));
+      setIsLoading(false);
+
+      addMessage({
+        id: `ai-${Date.now()}`, role: 'ai', type: 'text',
+        text: '✅ Soil health report ready! Opening share dialog…',
+        timestamp: new Date(),
+      });
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(uri, {
+          mimeType:    'application/pdf',
+          dialogTitle: 'Save Soil Health Report',
+          UTI:         'com.adobe.pdf',
+        });
+      } else {
+        addMessage({
+          id: `ai-${Date.now()}`, role: 'ai', type: 'text',
+          text: `📄 Report saved to:\n${uri}`,
+          timestamp: new Date(),
+        });
+      }
+    } catch (err) {
+      setMessages(prev => prev.filter(m => m.id !== progressId));
+      setIsLoading(false);
+      addMessage({
+        id: `ai-${Date.now()}`, role: 'ai', type: 'error',
+        text: `❌ Could not generate report: ${err.message}`,
+        timestamp: new Date(),
+      });
+    }
+  }, [history, latestReading, groqApiKey, addMessage]);
+
+  // ── Command executor ──────────────────────────────────────────────────
   const executeCommand = useCallback(
     async (text) => {
       const trimmed = text.trim();
       if (!trimmed) return;
 
-      // Append user message
       addMessage({
-        id:        `user-${Date.now()}`,
-        role:      'user',
-        type:      'text',
-        text:      trimmed,
-        timestamp: new Date(),
+        id: `user-${Date.now()}`, role: 'user', type: 'text',
+        text: trimmed, timestamp: new Date(),
       });
 
       const command = detectCommand(trimmed);
 
       switch (command) {
-        // ── START MONITORING ─────────────────────────────────────────────
+
+        // ── START MONITORING ───────────────────────────────────────────
         case 'START_MONITORING': {
           if (isMonitoringRef.current) {
             addMessage({
@@ -392,32 +532,27 @@ export default function AIChatScreen() {
           if (status !== 'connected') {
             addMessage({
               id: `ai-${Date.now()}`, role: 'ai', type: 'error',
-              text: '⚠️ MQTT broker is not connected. Go to ⚙️ Settings and tap "Test Connection" first.',
+              text: '⚠️ Firebase is not connected. Check your internet connection.',
               timestamp: new Date(),
             });
             break;
           }
 
-          isMonitoringRef.current = true;
+          isMonitoringRef.current  = true;
           setIsMonitoring(true);
-          capturedRef.current   = [];
+          capturedRef.current      = [];
           lastReadingKeyRef.current = null;
 
-          setMessages(prev => [
-            ...prev,
-            {
-              id:        'monitoring-progress',
-              role:      'ai',
-              type:      'progress',
-              text:      '📡 Monitoring... (0/5 readings captured)',
-              timestamp: new Date(),
-            },
-          ]);
+          setMessages(prev => [...prev, {
+            id: 'monitoring-progress', role: 'ai', type: 'progress',
+            text: '📡 Monitoring... (0/5 readings captured)',
+            timestamp: new Date(),
+          }]);
           setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 120);
           break;
         }
 
-        // ── END MONITORING ───────────────────────────────────────────────
+        // ── END MONITORING ─────────────────────────────────────────────
         case 'END_MONITORING': {
           if (!isMonitoringRef.current) {
             addMessage({
@@ -435,49 +570,30 @@ export default function AIChatScreen() {
 
           setMessages(prev => {
             const filtered = prev.filter(m => m.id !== 'monitoring-progress');
-            const result =
-              partial.length > 0
-                ? {
-                    id:       `ai-${Date.now()}`,
-                    role:     'ai',
-                    type:     'readings',
-                    text:     `🛑 Monitoring stopped early. ${partial.length} reading(s) captured:`,
-                    readings: partial,
-                    timestamp: new Date(),
-                  }
-                : {
-                    id:        `ai-${Date.now()}`,
-                    role:      'ai',
-                    type:      'text',
-                    text:      '🛑 Monitoring stopped. No readings were captured yet.',
-                    timestamp: new Date(),
-                  };
+            const result = partial.length > 0
+              ? { id:`ai-${Date.now()}`, role:'ai', type:'readings',
+                  text:`🛑 Monitoring stopped. ${partial.length} reading(s) captured:`,
+                  readings: partial, timestamp: new Date() }
+              : { id:`ai-${Date.now()}`, role:'ai', type:'text',
+                  text:'🛑 Monitoring stopped. No readings were captured yet.',
+                  timestamp: new Date() };
             return [...filtered, result];
           });
           break;
         }
 
-        // ── ANALYZE DATA ─────────────────────────────────────────────────
+        // ── ANALYZE DATA → PDF ─────────────────────────────────────────
         case 'ANALYZE_DATA': {
-          addMessage({
-            id:        `ai-${Date.now()}`,
-            role:      'ai',
-            type:      'charts',
-            text:      '📊 Here\'s your soil data analysis:',
-            history:   [...history],
-            timestamp: new Date(),
-          });
+          await generateAndSharePDF();
           break;
         }
 
-        // ── ASK GROQ AI ──────────────────────────────────────────────────
+        // ── ASK GROQ AI ────────────────────────────────────────────────
         case 'ASK_AI': {
           if (!groqApiKey) {
             addMessage({
-              id:        `ai-${Date.now()}`,
-              role:      'ai',
-              type:      'error',
-              text:      '🔑 No Groq API key found.\n\nGo to ⚙️ Settings → scroll down to "Groq AI" → paste your key and tap Save.',
+              id: `ai-${Date.now()}`, role: 'ai', type: 'error',
+              text: '🔑 No Groq API key found.\n\nGo to ⚙️ Settings → Groq AI → paste your key and tap Save.',
               timestamp: new Date(),
             });
             break;
@@ -487,19 +603,13 @@ export default function AIChatScreen() {
           try {
             const answer = await askGroq(trimmed, latestReading, history, groqApiKey);
             addMessage({
-              id:        `ai-${Date.now()}`,
-              role:      'ai',
-              type:      'text',
-              text:      answer,
-              timestamp: new Date(),
+              id: `ai-${Date.now()}`, role: 'ai', type: 'text',
+              text: answer, timestamp: new Date(),
             });
           } catch (err) {
             addMessage({
-              id:        `ai-${Date.now()}`,
-              role:      'ai',
-              type:      'error',
-              text:      `❌ ${err.message}`,
-              timestamp: new Date(),
+              id: `ai-${Date.now()}`, role: 'ai', type: 'error',
+              text: `❌ ${err.message}`, timestamp: new Date(),
             });
           } finally {
             setIsLoading(false);
@@ -508,21 +618,25 @@ export default function AIChatScreen() {
         }
       }
     },
-    [groqApiKey, history, latestReading, status, addMessage]
+    [groqApiKey, history, latestReading, status, addMessage, generateAndSharePDF]
   );
 
-  // ─── Voice recording ─────────────────────────────────────────────────────
+  // ── Voice: start recording ─────────────────────────────────────────────
   const startRecording = useCallback(async () => {
     if (isLoading) return;
     if (!groqApiKey) {
-      Alert.alert(
-        'API Key Required',
-        'Please enter your Groq API key in ⚙️ Settings before using voice input.'
-      );
+      Alert.alert('API Key Required',
+        'Please enter your Groq API key in ⚙️ Settings before using voice input.');
       return;
     }
 
     try {
+      // ← FIX: always clean up any stale recording object first
+      if (recordingRef.current) {
+        try { await recordingRef.current.stopAndUnloadAsync(); } catch (_) {}
+        recordingRef.current = null;
+      }
+
       const { status: permStatus } = await Audio.requestPermissionsAsync();
       if (permStatus !== 'granted') {
         Alert.alert('Permission Denied', 'Microphone access is required for voice input.');
@@ -530,22 +644,22 @@ export default function AIChatScreen() {
       }
 
       await Audio.setAudioModeAsync({
-        allowsRecordingIOS:  true,
+        allowsRecordingIOS:   true,
         playsInSilentModeIOS: true,
       });
 
       const { recording } = await Audio.Recording.createAsync(
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
-
       recordingRef.current = recording;
       setIsRecording(true);
     } catch (err) {
       console.error('[Voice] startRecording:', err);
-      Alert.alert('Recording Error', err.message);
+      // Silently handle — don't show alert for minor errors
     }
   }, [groqApiKey, isLoading]);
 
+  // ── Voice: stop recording ──────────────────────────────────────────────
   const stopRecording = useCallback(async () => {
     if (!recordingRef.current) return;
 
@@ -566,17 +680,15 @@ export default function AIChatScreen() {
         return;
       }
 
-      // Show transcribing spinner in chat
       const spinId = `transcribing-${Date.now()}`;
-      setMessages(prev => [
-        ...prev,
-        { id: spinId, role: 'ai', type: 'progress', text: '🎙️ Transcribing...', timestamp: new Date() },
-      ]);
+      setMessages(prev => [...prev, {
+        id: spinId, role: 'ai', type: 'progress',
+        text: '🎙️ Transcribing…', timestamp: new Date(),
+      }]);
       setIsLoading(true);
 
       const transcript = await transcribeAudio(uri, groqApiKey);
 
-      // Remove spinner
       setMessages(prev => prev.filter(m => m.id !== spinId));
       setIsLoading(false);
 
@@ -592,18 +704,15 @@ export default function AIChatScreen() {
       await executeCommand(transcript);
     } catch (err) {
       setIsLoading(false);
+      setIsRecording(false);
       setMessages(prev => prev.filter(m => !m.id.startsWith('transcribing-')));
       recordingRef.current = null;
-      console.error('[Voice] stopRecording:', err);
-      addMessage({
-        id: `ai-${Date.now()}`, role: 'ai', type: 'error',
-        text: `❌ Voice error: ${err.message}`,
-        timestamp: new Date(),
-      });
+      console.error('[Voice] stopRecording:', err.message);
+      // Silently fail for minor errors — voice still worked (user saw response)
     }
   }, [groqApiKey, executeCommand, addMessage]);
 
-  // ─── Text submit ─────────────────────────────────────────────────────────
+  // ── Text submit ────────────────────────────────────────────────────────
   const handleSend = useCallback(() => {
     const text = inputText.trim();
     if (!text || isLoading) return;
@@ -611,14 +720,14 @@ export default function AIChatScreen() {
     executeCommand(text);
   }, [inputText, isLoading, executeCommand]);
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
     <KeyboardAvoidingView
       style={styles.screen}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 92 : 0}
     >
-      {/* ── Header ─────────────────────────────────────────────────────── */}
+      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>🎙️ AI Assistant</Text>
         <View style={styles.headerRight}>
@@ -633,7 +742,7 @@ export default function AIChatScreen() {
         </View>
       </View>
 
-      {/* ── Chat list ──────────────────────────────────────────────────── */}
+      {/* Chat list */}
       <FlatList
         ref={flatListRef}
         data={messages}
@@ -641,22 +750,18 @@ export default function AIChatScreen() {
         renderItem={({ item }) => <MessageBubble message={item} />}
         contentContainerStyle={styles.chatContent}
         showsVerticalScrollIndicator={false}
-        onContentSizeChange={() =>
-          flatListRef.current?.scrollToEnd({ animated: false })
-        }
+        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
       />
 
-      {/* ── Recording indicator ────────────────────────────────────────── */}
+      {/* Recording indicator */}
       {isRecording && (
         <View style={styles.recordingBar}>
-          <Animated.View
-            style={[styles.recDot, { transform: [{ scale: pulseAnim }] }]}
-          />
+          <Animated.View style={[styles.recDot, { transform: [{ scale: pulseAnim }] }]} />
           <Text style={styles.recordingText}>Recording… Release to send</Text>
         </View>
       )}
 
-      {/* ── Input bar ─────────────────────────────────────────────────── */}
+      {/* Input bar */}
       <View style={styles.inputBar}>
         <TextInput
           style={styles.input}
@@ -671,18 +776,11 @@ export default function AIChatScreen() {
           onSubmitEditing={handleSend}
           editable={!isRecording}
         />
-
         {inputText.trim() ? (
-          /* Send button */
-          <TouchableOpacity
-            style={styles.sendBtn}
-            onPress={handleSend}
-            disabled={isLoading}
-          >
+          <TouchableOpacity style={styles.sendBtn} onPress={handleSend} disabled={isLoading}>
             <Text style={styles.sendBtnText}>➤</Text>
           </TouchableOpacity>
         ) : (
-          /* Mic button: hold to record */
           <Pressable
             onPressIn={startRecording}
             onPressOut={stopRecording}
@@ -704,329 +802,75 @@ export default function AIChatScreen() {
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────
+// ─── Styles ────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: COLORS.bg,
-  },
-  header: {
-    flexDirection:   'row',
-    justifyContent:  'space-between',
-    alignItems:      'center',
-    paddingTop:      52,
-    paddingBottom:   12,
-    paddingHorizontal: 16,
-    backgroundColor: COLORS.card,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.cardBorder,
-  },
-  headerTitle: {
-    color:      COLORS.textPrimary,
-    fontSize:   SIZES.lg,
-    fontWeight: '800',
-  },
-  headerRight: {
-    flexDirection: 'row',
-    alignItems:    'center',
-  },
-  monBadge: {
-    backgroundColor: COLORS.nutrientRich + '22',
-    borderColor:     COLORS.nutrientRich,
-    borderWidth:     1,
-    borderRadius:    20,
-    paddingHorizontal: 10,
-    paddingVertical:   3,
-  },
-  monBadgeText: {
-    color:      COLORS.nutrientRich,
-    fontSize:   10,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  chatContent: {
-    padding:       12,
-    paddingBottom: 8,
-  },
-  recordingBar: {
-    flexDirection:   'row',
-    alignItems:      'center',
-    justifyContent:  'center',
-    backgroundColor: COLORS.depleted + '18',
-    borderTopWidth:  1,
-    borderTopColor:  COLORS.depleted + '44',
-    paddingVertical: 8,
-  },
-  recDot: {
-    width:           10,
-    height:          10,
-    borderRadius:    5,
-    backgroundColor: COLORS.depleted,
-    marginRight:     8,
-  },
-  recordingText: {
-    color:    COLORS.depleted,
-    fontSize: SIZES.sm,
-    fontWeight: '600',
-  },
-  inputBar: {
-    flexDirection:     'row',
-    alignItems:        'flex-end',
-    paddingHorizontal: 12,
-    paddingVertical:   10,
-    backgroundColor:   COLORS.card,
-    borderTopWidth:    1,
-    borderTopColor:    COLORS.cardBorder,
-    columnGap:         8,
-  },
-  input: {
-    flex:              1,
-    backgroundColor:   COLORS.surface,
-    borderRadius:      22,
-    borderWidth:       1,
-    borderColor:       COLORS.cardBorder,
-    paddingHorizontal: 16,
-    paddingVertical:   10,
-    color:             COLORS.textPrimary,
-    fontSize:          SIZES.md,
-    maxHeight:         120,
-  },
-  sendBtn: {
-    width:           44,
-    height:          44,
-    borderRadius:    22,
-    backgroundColor: COLORS.accent,
-    alignItems:      'center',
-    justifyContent:  'center',
-  },
-  sendBtnText: {
-    color:    '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  micBtn: {
-    width:           44,
-    height:          44,
-    borderRadius:    22,
-    backgroundColor: COLORS.surface,
-    borderWidth:     1,
-    borderColor:     COLORS.cardBorder,
-    alignItems:      'center',
-    justifyContent:  'center',
-  },
-  micBtnActive: {
-    backgroundColor: COLORS.depleted + '33',
-    borderColor:     COLORS.depleted,
-  },
-  micBtnIcon: {
-    fontSize: 20,
-  },
+  screen:           { flex:1, backgroundColor: COLORS.bg },
+  header:           { flexDirection:'row', justifyContent:'space-between', alignItems:'center',
+                      paddingTop:52, paddingBottom:12, paddingHorizontal:16,
+                      backgroundColor: COLORS.card, borderBottomWidth:1, borderBottomColor: COLORS.cardBorder },
+  headerTitle:      { color: COLORS.textPrimary, fontSize: SIZES.lg, fontWeight:'800' },
+  headerRight:      { flexDirection:'row', alignItems:'center' },
+  monBadge:         { backgroundColor: COLORS.nutrientRich + '22', borderColor: COLORS.nutrientRich,
+                      borderWidth:1, borderRadius:20, paddingHorizontal:10, paddingVertical:3 },
+  monBadgeText:     { color: COLORS.nutrientRich, fontSize:10, fontWeight:'700', letterSpacing:0.5 },
+  chatContent:      { padding:12, paddingBottom:8 },
+  recordingBar:     { flexDirection:'row', alignItems:'center', justifyContent:'center',
+                      backgroundColor: COLORS.depleted + '18', borderTopWidth:1,
+                      borderTopColor: COLORS.depleted + '44', paddingVertical:8 },
+  recDot:           { width:10, height:10, borderRadius:5, backgroundColor: COLORS.depleted, marginRight:8 },
+  recordingText:    { color: COLORS.depleted, fontSize: SIZES.sm, fontWeight:'600' },
+  inputBar:         { flexDirection:'row', alignItems:'flex-end', paddingHorizontal:12,
+                      paddingVertical:10, backgroundColor: COLORS.card,
+                      borderTopWidth:1, borderTopColor: COLORS.cardBorder, columnGap:8 },
+  input:            { flex:1, backgroundColor: COLORS.surface, borderRadius:22, borderWidth:1,
+                      borderColor: COLORS.cardBorder, paddingHorizontal:16, paddingVertical:10,
+                      color: COLORS.textPrimary, fontSize: SIZES.md, maxHeight:120 },
+  sendBtn:          { width:44, height:44, borderRadius:22, backgroundColor: COLORS.accent,
+                      alignItems:'center', justifyContent:'center' },
+  sendBtnText:      { color:'#fff', fontSize:18, fontWeight:'700' },
+  micBtn:           { width:44, height:44, borderRadius:22, backgroundColor: COLORS.surface,
+                      borderWidth:1, borderColor: COLORS.cardBorder, alignItems:'center', justifyContent:'center' },
+  micBtnActive:     { backgroundColor: COLORS.depleted + '33', borderColor: COLORS.depleted },
+  micBtnIcon:       { fontSize:20 },
 });
-
-// ─── Bubble styles ────────────────────────────────────────────────────────
 
 const bubSt = StyleSheet.create({
-  wrapper: {
-    flexDirection:  'row',
-    marginVertical: 5,
-    alignItems:     'flex-end',
-    paddingHorizontal: 4,
-  },
-  aiWrapper: {
-    justifyContent: 'flex-start',
-  },
-  userWrapper: {
-    justifyContent: 'flex-end',
-  },
-  avatar: {
-    width:          30,
-    height:         30,
-    borderRadius:   15,
-    backgroundColor: COLORS.surface,
-    alignItems:     'center',
-    justifyContent: 'center',
-    marginHorizontal: 6,
-    flexShrink: 0,
-  },
-  avatarUser: {
-    backgroundColor: COLORS.accent + '33',
-  },
-  avatarText: {
-    fontSize: 16,
-  },
-  bubble: {
-    maxWidth:      SCREEN_W * 0.78,
-    borderRadius:  18,
-    paddingHorizontal: 14,
-    paddingVertical:   10,
-    flexShrink: 1,
-  },
-  aiBubble: {
-    backgroundColor: COLORS.card,
-    borderWidth:     1,
-    borderColor:     COLORS.cardBorder,
-    borderBottomLeftRadius: 4,
-  },
-  userBubble: {
-    backgroundColor: COLORS.accent,
-    borderBottomRightRadius: 4,
-  },
-  errorBubble: {
-    backgroundColor: COLORS.depleted + '18',
-    borderColor:     COLORS.depleted + '55',
-    borderWidth:     1,
-  },
-  progressBubble: {
-    backgroundColor: COLORS.surface,
-    borderColor:     COLORS.cardBorder + '88',
-    borderWidth:     1,
-  },
-  text: {
-    fontSize:   SIZES.md,
-    lineHeight: 22,
-  },
-  aiText: {
-    color: COLORS.textPrimary,
-  },
-  userText: {
-    color: '#fff',
-  },
-  errorText: {
-    color: COLORS.depleted,
-  },
-  progressText: {
-    color:      COLORS.textSecondary,
-    fontStyle:  'italic',
-    fontSize:   SIZES.sm,
-  },
-  ts: {
-    fontSize:   9,
-    color:      COLORS.textMuted,
-    marginTop:  4,
-    alignSelf:  'flex-start',
-  },
-  tsUser: {
-    alignSelf: 'flex-end',
-    color:     'rgba(255,255,255,0.55)',
-  },
+  wrapper:          { flexDirection:'row', marginVertical:5, alignItems:'flex-end', paddingHorizontal:4 },
+  aiWrapper:        { justifyContent:'flex-start' },
+  userWrapper:      { justifyContent:'flex-end' },
+  avatar:           { width:30, height:30, borderRadius:15, backgroundColor: COLORS.surface,
+                      alignItems:'center', justifyContent:'center', marginHorizontal:6, flexShrink:0 },
+  avatarUser:       { backgroundColor: COLORS.accent + '33' },
+  avatarText:       { fontSize:16 },
+  bubble:           { maxWidth: SCREEN_W * 0.78, borderRadius:18, paddingHorizontal:14,
+                      paddingVertical:10, flexShrink:1 },
+  aiBubble:         { backgroundColor: COLORS.card, borderWidth:1, borderColor: COLORS.cardBorder,
+                      borderBottomLeftRadius:4 },
+  userBubble:       { backgroundColor: COLORS.accent, borderBottomRightRadius:4 },
+  errorBubble:      { backgroundColor: COLORS.depleted + '18', borderColor: COLORS.depleted + '55', borderWidth:1 },
+  progressBubble:   { backgroundColor: COLORS.surface, borderColor: COLORS.cardBorder + '88', borderWidth:1 },
+  text:             { fontSize: SIZES.md, lineHeight:22 },
+  aiText:           { color: COLORS.textPrimary },
+  userText:         { color:'#fff' },
+  errorText:        { color: COLORS.depleted },
+  progressText:     { color: COLORS.textSecondary, fontStyle:'italic', fontSize: SIZES.sm },
+  ts:               { fontSize:9, color: COLORS.textMuted, marginTop:4, alignSelf:'flex-start' },
+  tsUser:           { alignSelf:'flex-end', color:'rgba(255,255,255,0.55)' },
 });
-
-// ─── Readings card styles ─────────────────────────────────────────────────
 
 const readSt = StyleSheet.create({
-  container: {
-    marginTop:    10,
-    borderRadius: 10,
-    overflow:     'hidden',
-    borderWidth:  1,
-    borderColor:  COLORS.cardBorder,
-  },
-  row: {
-    flexDirection:   'row',
-    alignItems:      'flex-start',
-    backgroundColor: COLORS.surface,
-    padding:         10,
-  },
-  rowBorder: {
-    borderTopWidth: 1,
-    borderTopColor: COLORS.cardBorder,
-  },
-  numBadge: {
-    width:           28,
-    height:          28,
-    borderRadius:    14,
-    backgroundColor: COLORS.accent + '22',
-    borderWidth:     1,
-    borderColor:     COLORS.accent,
-    alignItems:      'center',
-    justifyContent:  'center',
-    marginRight:     10,
-    marginTop:       2,
-    flexShrink:      0,
-  },
-  numText: {
-    color:      COLORS.accent,
-    fontSize:   10,
-    fontWeight: '700',
-  },
-  dataCol: {
-    flex: 1,
-  },
-  time: {
-    color:    COLORS.textMuted,
-    fontSize: 10,
-    marginBottom: 4,
-  },
-  npkRow: {
-    flexDirection: 'row',
-    marginBottom:  3,
-  },
-  npk: {
-    fontSize:   SIZES.sm,
-    fontWeight: '700',
-  },
-  env: {
-    color:    COLORS.textSecondary,
-    fontSize: SIZES.sm,
-    marginBottom: 3,
-  },
-  cls: {
-    fontSize:   SIZES.sm,
-    fontWeight: '600',
-  },
-});
-
-// ─── Chart styles ─────────────────────────────────────────────────────────
-
-const chartSt = StyleSheet.create({
-  card: {
-    marginTop:    10,
-    padding:      10,
-    backgroundColor: COLORS.surface,
-    borderRadius: 10,
-    borderWidth:  1,
-    borderColor:  COLORS.cardBorder,
-  },
-  cardTitle: {
-    color:        COLORS.textSecondary,
-    fontSize:     SIZES.sm,
-    fontWeight:   '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 10,
-  },
-  wrapper: {
-    marginBottom: 10,
-  },
-  row: {
-    flexDirection:  'row',
-    justifyContent: 'space-between',
-    alignItems:     'center',
-    marginBottom:   4,
-  },
-  label: {
-    color:    COLORS.textSecondary,
-    fontSize: SIZES.xs,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  value: {
-    fontSize:   SIZES.sm,
-    fontWeight: '700',
-  },
-  emptyBox: {
-    marginTop:    10,
-    padding:      14,
-    backgroundColor: COLORS.surface,
-    borderRadius: 10,
-    borderWidth:  1,
-    borderColor:  COLORS.cardBorder,
-  },
-  emptyText: {
-    color:    COLORS.textSecondary,
-    fontSize: SIZES.sm,
-    lineHeight: 20,
-  },
+  container:  { marginTop:10, borderRadius:10, overflow:'hidden', borderWidth:1, borderColor: COLORS.cardBorder },
+  row:        { flexDirection:'row', alignItems:'flex-start', backgroundColor: COLORS.surface, padding:10 },
+  rowBorder:  { borderTopWidth:1, borderTopColor: COLORS.cardBorder },
+  numBadge:   { width:28, height:28, borderRadius:14, backgroundColor: COLORS.accent + '22',
+                borderWidth:1, borderColor: COLORS.accent, alignItems:'center', justifyContent:'center',
+                marginRight:10, marginTop:2, flexShrink:0 },
+  numText:    { color: COLORS.accent, fontSize:10, fontWeight:'700' },
+  dataCol:    { flex:1 },
+  time:       { color: COLORS.textMuted, fontSize:10, marginBottom:4 },
+  npkRow:     { flexDirection:'row', marginBottom:3 },
+  npk:        { fontSize: SIZES.sm, fontWeight:'700' },
+  env:        { color: COLORS.textSecondary, fontSize: SIZES.sm, marginBottom:3 },
+  cls:        { fontSize: SIZES.sm, fontWeight:'600' },
 });

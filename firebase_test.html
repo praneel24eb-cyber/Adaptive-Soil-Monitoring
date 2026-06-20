@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Soil Monitor — Live Firebase</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .header h1 {
+      font-size: 1.6rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #4ade80, #22d3ee);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #6b7280;
+      transition: background 0.3s;
+    }
+    .status-dot.connected { background: #4ade80; box-shadow: 0 0 8px #4ade8088; }
+    .status-dot.error     { background: #f87171; }
+
+    /* ── Grid ── */
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+
+    /* ── Card ── */
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 14px;
+      padding: 20px;
+    }
+    .card-title {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #8b949e;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+
+    /* ── Live Reading ── */
+    .fertility-badge {
+      display: inline-block;
+      padding: 4px 14px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 700;
+      margin-bottom: 16px;
+    }
+    .Nutrient-Rich { background: #0d3321; color: #4ade80; border: 1px solid #4ade8044; }
+    .Moderate      { background: #2d2500; color: #fbbf24; border: 1px solid #fbbf2444; }
+    .Depleted      { background: #2d0a0a; color: #f87171; border: 1px solid #f8717144; }
+    .Unknown       { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .metric {
+      background: #0d1117;
+      border: 1px solid #21262d;
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .metric-label { font-size: 0.7rem; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+    .metric-value { font-size: 1.3rem; font-weight: 800; }
+    .metric-unit  { font-size: 0.7rem; color: #8b949e; }
+
+    .N-color { color: #4ade80; }
+    .P-color { color: #60a5fa; }
+    .K-color { color: #a78bfa; }
+    .M-color { color: #22d3ee; }
+    .T-color { color: #fb923c; }
+    .C-color { color: #facc15; }
+
+    /* ── CUSUM / Drift ── */
+    .drift-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 14px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      background: #0d1117;
+      border: 1px solid #21262d;
+      font-size: 0.9rem;
+    }
+    .drift-alert { color: #f87171; font-weight: 700; }
+    .drift-ok    { color: #4ade80; font-weight: 600; }
+
+    /* ── Last Updated ── */
+    .last-update {
+      text-align: center;
+      margin-top: 12px;
+      font-size: 0.75rem;
+      color: #8b949e;
+    }
+
+    /* ── History Table ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    thead th {
+      text-align: left;
+      padding: 8px 10px;
+      color: #8b949e;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      border-bottom: 1px solid #30363d;
+    }
+    tbody tr { border-bottom: 1px solid #21262d; transition: background 0.15s; }
+    tbody tr:hover { background: #1c2128; }
+    tbody td { padding: 8px 10px; color: #c9d1d9; }
+    .class-chip {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+
+    /* ── Alerts ── */
+    .alert-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #2d0a0a;
+      border: 1px solid #f8717133;
+      margin-bottom: 8px;
+    }
+    .alert-icon { font-size: 1.2rem; flex-shrink: 0; }
+    .alert-msg  { font-size: 0.85rem; color: #f87171; font-weight: 600; }
+    .alert-time { font-size: 0.72rem; color: #8b949e; margin-top: 2px; }
+    .no-alerts  { color: #4ade80; font-size: 0.9rem; text-align: center; padding: 12px; }
+
+    /* ── Pulse animation for live indicator ── */
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+    .live-dot { animation: pulse 2s infinite; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <h1>🌱 Soil Monitor — Live</h1>
+    <div class="status-badge">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Connecting…</span>
+    </div>
+  </div>
+
+  <div class="grid">
+
+    <!-- ── Live Reading Card ── -->
+    <div class="card">
+      <div class="card-title">⚡ Latest Reading</div>
+      <span class="fertility-badge Unknown" id="fertilityBadge">— Waiting for data…</span>
+
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-label">Nitrogen</div>
+          <div class="metric-value N-color" id="valN">—</div>
+          <div class="metric-unit">mg/kg</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Phosphorus</div>
+          <div class="metric-value P-color" id="valP">—</div>
+          <div class="metric-unit">mg/kg</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Potassium</div>
+          <div class="metric-value K-color" id="valK">—</div>
+          <div class="metric-unit">mg/kg</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Moisture</div>
+          <div class="metric-value M-color" id="valMoisture">—</div>
+          <div class="metric-unit">%</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">Temperature</div>
+          <div class="metric-value T-color" id="valTemp">—</div>
+          <div class="metric-unit">°C</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">CUSUM Score</div>
+          <div class="metric-value C-color" id="valCusum">—</div>
+          <div class="metric-unit">drift index</div>
+        </div>
+      </div>
+
+      <div class="drift-row">
+        <span>Drift Alert</span>
+        <span id="driftStatus" class="drift-ok">✓ Normal</span>
+      </div>
+
+      <div class="last-update" id="lastUpdate">No data yet</div>
+    </div>
+
+    <!-- ── Alerts Card ── -->
+    <div class="card">
+      <div class="card-title">🚨 Recent Drift Alerts</div>
+      <div id="alertsList"><div class="no-alerts">✓ No alerts yet</div></div>
+    </div>
+
+  </div>
+
+  <!-- History Table -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">📊 Reading History (Last 20)</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Time</th>
+            <th>N</th>
+            <th>P</th>
+            <th>K</th>
+            <th>Moisture</th>
+            <th>Temp</th>
+            <th>Class</th>
+            <th>CUSUM</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr><td colspan="9" style="text-align:center;color:#8b949e;padding:20px">Waiting for data…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Firebase SDK via CDN (modular) -->
+  <script type="module">
+    import { initializeApp }   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getDatabase, ref, onValue, query, limitToLast }
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+    // ── Firebase config ──────────────────────────────────────────────────
+    const firebaseConfig = {
+      apiKey:            "AIzaSyBjpJlHwxssSZ_hleurE_o_e8nIsGBL2fU",
+      authDomain:        "soil-monitoring-8b69c.firebaseapp.com",
+      databaseURL:       "https://soil-monitoring-8b69c-default-rtdb.firebaseio.com",
+      projectId:         "soil-monitoring-8b69c",
+      storageBucket:     "soil-monitoring-8b69c.firebasestorage.app",
+      messagingSenderId: "911112987129",
+      appId:             "1:911112987129:web:8e0e7f1bf60c0b8f509d28",
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+
+    // ── Helpers ─────────────────────────────────────────────────────────
+    const el  = id => document.getElementById(id);
+    const fmt = (v, d=1) => v != null ? Number(v).toFixed(d) : '—';
+    const time = ts => {
+      const d = new Date(typeof ts === 'number' && ts > 1e10 ? ts : Date.now());
+      return d.toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    };
+    const classColor = c => ({ 'Nutrient-Rich':'#4ade80', 'Moderate':'#fbbf24', 'Depleted':'#f87171' }[c] ?? '#94a3b8');
+    const classBg    = c => ({ 'Nutrient-Rich':'#0d3321',  'Moderate':'#2d2500',  'Depleted':'#2d0a0a' }[c] ?? '#1e293b');
+
+    function setStatus(state) {
+      const dot  = el('statusDot');
+      const text = el('statusText');
+      dot.className = 'status-dot ' + state;
+      text.textContent = state === 'connected' ? '● Live' : state === 'error' ? '✕ Error' : '◌ Connecting…';
+    }
+
+    // ── Latest Reading ───────────────────────────────────────────────────
+    onValue(ref(db, 'soil/readings/latest'), snap => {
+      const d = snap.val();
+      if (!d) return;
+
+      setStatus('connected');
+
+      // Fertility badge
+      const badge = el('fertilityBadge');
+      badge.textContent = d.class ?? 'Unknown';
+      badge.className = 'fertility-badge ' + (d.class?.replace('-','') ?? 'Unknown').replace(' ','-') || 'Unknown';
+      badge.style.background = classBg(d.class);
+      badge.style.color = classColor(d.class);
+      badge.style.border = `1px solid ${classColor(d.class)}44`;
+
+      el('valN').textContent        = fmt(d.N, 0);
+      el('valP').textContent        = fmt(d.P, 0);
+      el('valK').textContent        = fmt(d.K, 0);
+      el('valMoisture').textContent = fmt(d.moisture);
+      el('valTemp').textContent     = fmt(d.temp, 2);
+      el('valCusum').textContent    = fmt(d.cusum, 2);
+
+      const drift = d.drift === true || d.drift === 1;
+      const ds = el('driftStatus');
+      ds.textContent = drift ? '⚠ DRIFT DETECTED' : '✓ Normal';
+      ds.className   = drift ? 'drift-alert' : 'drift-ok';
+
+      el('lastUpdate').textContent = '🔴 Live · Last update: ' + time(d.timestamp);
+    }, err => setStatus('error'));
+
+    // ── History ──────────────────────────────────────────────────────────
+    onValue(query(ref(db, 'soil/readings/history'), limitToLast(20)), snap => {
+      const data = snap.val();
+      if (!data) return;
+
+      const rows = Object.values(data)
+        .sort((a,b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
+
+      const body = el('historyBody');
+      body.innerHTML = rows.map((r, i) => `
+        <tr>
+          <td style="color:#8b949e">${i+1}</td>
+          <td>${time(r.timestamp)}</td>
+          <td class="N-color" style="color:#4ade80;font-weight:700">${fmt(r.N,0)}</td>
+          <td style="color:#60a5fa;font-weight:700">${fmt(r.P,0)}</td>
+          <td style="color:#a78bfa;font-weight:700">${fmt(r.K,0)}</td>
+          <td style="color:#22d3ee">${fmt(r.moisture)}%</td>
+          <td style="color:#fb923c">${fmt(r.temp,2)}°C</td>
+          <td>
+            <span class="class-chip"
+              style="background:${classBg(r.class)};color:${classColor(r.class)};border:1px solid ${classColor(r.class)}44">
+              ${r.class ?? '—'}
+            </span>
+          </td>
+          <td style="color:${r.drift?'#f87171':'#8b949e'}">${fmt(r.cusum,2)}</td>
+        </tr>`).join('');
+    });
+
+    // ── Alerts ───────────────────────────────────────────────────────────
+    onValue(query(ref(db, 'soil/alerts'), limitToLast(10)), snap => {
+      const data = snap.val();
+      const list = el('alertsList');
+      if (!data) { list.innerHTML = '<div class="no-alerts">✓ No alerts yet</div>'; return; }
+
+      const alerts = Object.values(data).sort((a,b) => (b.timestamp??0)-(a.timestamp??0));
+      list.innerHTML = alerts.map(a => `
+        <div class="alert-item">
+          <div class="alert-icon">⚠️</div>
+          <div>
+            <div class="alert-msg">Drift Detected — CUSUM ${fmt(a.cusum,2)}</div>
+            <div class="alert-time">${a.message ?? 'Consider fertilizing'} · ${time(a.timestamp)}</div>
+          </div>
+        </div>`).join('');
+    });
+  </script>
+</body>
+</html>
