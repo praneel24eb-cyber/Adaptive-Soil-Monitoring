@@ -4,7 +4,7 @@
 #include <ModbusMaster.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include "esp_wpa2.h"
+// esp_wpa2.h removed - using personal hotspot (simple WPA2) instead of RVCE enterprise WiFi
 #include "model.h"
 
 // ==========================================
@@ -30,14 +30,14 @@
 // ==========================================
 // WIFI & MQTT CREDENTIALS
 // ==========================================
-const char* WIFI_SSID     = "RVCE";
-const char* EAP_IDENTITY  = "praneelka.cs24";
-const char* EAP_PASSWORD  = "Chikki#16";
+const char* WIFI_SSID     = "Praneelka";   // Phone hotspot name
+const char* WIFI_PASSWORD = "praneel16";   // Phone hotspot password
 
-// Cloud MQTT broker - bypasses RVCE AP isolation (free public broker)
-const char* MQTT_BROKER   = "broker.emqx.io";
+// Laptop's IP on the hotspot network — run ipconfig on laptop after
+// connecting to the Praneelka hotspot, then update this value & re-upload
+const char* MQTT_BROKER   = "10.237.146.29"; // Laptop IP on Praneelka hotspot
 const int   MQTT_PORT     = 1883;
-const char* MQTT_CLIENT   = "RVCE_SoilMonitor_ESP32"; // unique ID on shared broker
+const char* MQTT_CLIENT   = "RVCE_SoilMonitor_ESP32";
 
 // ==========================================
 // OBJECTS
@@ -131,27 +131,21 @@ float readMoisturePercent() {
 // ==========================================
 void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) return;
-  
-  Serial.print("Connecting to WPA2 Enterprise WiFi: ");
+
+  Serial.print("Connecting to hotspot: ");
   Serial.println(WIFI_SSID);
-  
+
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
-  
-  esp_wifi_sta_wpa2_ent_set_identity((uint8_t *)EAP_IDENTITY, strlen(EAP_IDENTITY));
-  esp_wifi_sta_wpa2_ent_set_username((uint8_t *)EAP_IDENTITY, strlen(EAP_IDENTITY));
-  esp_wifi_sta_wpa2_ent_set_password((uint8_t *)EAP_PASSWORD, strlen(EAP_PASSWORD));
-  esp_wifi_sta_wpa2_ent_enable();
-  
-  WiFi.begin(WIFI_SSID);
-  
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);   // Simple WPA2 — no enterprise auth needed
+
   int attempt = 0;
   while (WiFi.status() != WL_CONNECTED && attempt < 30) {
     delay(500);
     Serial.print(".");
     attempt++;
   }
-  
+
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\nWiFi connected. IP: " + WiFi.localIP().toString());
   } else {
