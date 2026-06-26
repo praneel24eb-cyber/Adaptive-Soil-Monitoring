@@ -14,23 +14,30 @@ const AlertItem = ({ alert }) => {
     ? new Date(alert.receivedAt).toLocaleDateString()
     : '';
 
+  const isThreshold = alert.type === 'threshold';
+  const badgeColor  = isThreshold ? COLORS.depleted : COLORS.cusumThreshold;
+  const badgeText   = isThreshold ? '🚨 THRESHOLD' : '⚠️ DRIFT';
+  const cardBorder  = isThreshold ? COLORS.depleted  : COLORS.cusumThreshold;
+
   return (
-    <View style={styles.alertCard}>
+    <View style={[styles.alertCard, { borderLeftColor: cardBorder, borderColor: cardBorder + '30' }]}>
       <View style={styles.alertHeader}>
-        <View style={styles.alertBadge}>
-          <Text style={styles.alertBadgeText}>⚠️ DRIFT</Text>
+        <View style={[styles.alertBadge, { backgroundColor: badgeColor + '20' }]}>
+          <Text style={[styles.alertBadgeText, { color: badgeColor }]}>{badgeText}</Text>
         </View>
         <Text style={styles.alertTime}>{time}</Text>
       </View>
       <Text style={styles.alertDate}>{date}</Text>
       <Text style={styles.alertMessage}>{alert.message}</Text>
       <View style={styles.alertDetails}>
-        <View style={styles.detailItem}>
-          <Text style={styles.detailLabel}>CUSUM</Text>
-          <Text style={[styles.detailValue, { color: COLORS.cusumLine }]}>
-            {alert.cusum?.toFixed(2) || '—'}
-          </Text>
-        </View>
+        {!isThreshold && (
+          <View style={styles.detailItem}>
+            <Text style={styles.detailLabel}>CUSUM</Text>
+            <Text style={[styles.detailValue, { color: COLORS.cusumLine }]}>
+              {alert.cusum?.toFixed(2) || '—'}
+            </Text>
+          </View>
+        )}
         <View style={styles.detailItem}>
           <Text style={styles.detailLabel}>Class</Text>
           <Text style={[styles.detailValue, { color: getClassColor(alert.class) }]}>

@@ -10,17 +10,21 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useMqtt } from '../services/firebaseService';   // same hook, new source
 import { COLORS, SIZES } from '../theme';
-import { STORAGE_KEY_GROQ } from '../constants';
+import { STORAGE_KEY_GROQ, STORAGE_KEY_THRESHOLDS, DEFAULT_THRESHOLDS } from '../constants';
 
 const DB_URL = 'https://soil-monitoring-8b69c-default-rtdb.firebaseio.com';
 
 const SettingsScreen = () => {
   const { status, history, alerts, latestReading, connect } = useMqtt();
   const [groqKey, setGroqKey] = useState('');
+  const [thresholds, setThresholds] = useState({ ...DEFAULT_THRESHOLDS });
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY_GROQ).then(k => {
       if (k) setGroqKey(k);
+    });
+    AsyncStorage.getItem(STORAGE_KEY_THRESHOLDS).then(t => {
+      if (t) setThresholds({ ...DEFAULT_THRESHOLDS, ...JSON.parse(t) });
     });
   }, []);
 
@@ -32,6 +36,16 @@ const SettingsScreen = () => {
     }
     await AsyncStorage.setItem(STORAGE_KEY_GROQ, trimmed);
     Alert.alert('Saved', 'Groq API key saved. Switch to the 🎙️ AI tab to use it.');
+  };
+
+  const handleSaveThresholds = async () => {
+    await AsyncStorage.setItem(STORAGE_KEY_THRESHOLDS, JSON.stringify(thresholds));
+    Alert.alert('Saved', 'Alert thresholds updated. New readings will be checked against these limits.');
+  };
+
+  const updateThreshold = (key, value) => {
+    const num = parseFloat(value);
+    setThresholds(prev => ({ ...prev, [key]: isNaN(num) ? prev[key] : num }));
   };
 
   const handleReconnect = () => {
@@ -123,6 +137,42 @@ const SettingsScreen = () => {
             </View>
           </>
         )}
+      </View>
+
+      {/* ── Alert Thresholds ──────────────────────────────────────────── */}
+      <View style={styles.card}>
+        <Text style={styles.sectionLabel}>🔔 Alert Thresholds</Text>
+        <Text style={[styles.hint, { marginBottom: 12 }]}>
+          Alerts fire when sensor values breach these limits.
+        </Text>
+
+        {[
+          { key: 'N_min',        label: 'Nitrogen min',     unit: 'mg/kg', color: COLORS.nitrogen    },
+          { key: 'P_min',        label: 'Phosphorus min',   unit: 'mg/kg', color: COLORS.phosphorus  },
+          { key: 'K_min',        label: 'Potassium min',    unit: 'mg/kg', color: COLORS.potassium   },
+          { key: 'moisture_min', label: 'Moisture min',     unit: '%',     color: COLORS.moisture    },
+          { key: 'moisture_max', label: 'Moisture max',     unit: '%',     color: COLORS.moisture    },
+          { key: 'temp_max',     label: 'Temperature max',  unit: '°C',    color: COLORS.temperature },
+        ].map(({ key, label, unit, color }) => (
+          <View key={key} style={styles.threshRow}>
+            <View style={styles.threshLabelWrap}>
+              <View style={[styles.threshDot, { backgroundColor: color }]} />
+              <Text style={styles.threshLabel}>{label}</Text>
+              <Text style={styles.threshUnit}>{unit}</Text>
+            </View>
+            <TextInput
+              style={styles.threshInput}
+              value={String(thresholds[key] ?? '')}
+              onChangeText={v => updateThreshold(key, v)}
+              keyboardType="decimal-pad"
+              placeholderTextColor={COLORS.textMuted}
+            />
+          </View>
+        ))}
+
+        <TouchableOpacity style={styles.saveBtn} onPress={handleSaveThresholds}>
+          <Text style={styles.saveBtnText}>Save Thresholds</Text>
+        </TouchableOpacity>
       </View>
 
       {/* ── Groq AI ───────────────────────────────────────────────────── */}
@@ -268,6 +318,47 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontSize: SIZES.md,
     lineHeight: 24,
+  },
+  threshRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.surface,
+  },
+  threshLabelWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    gap: 8,
+  },
+  threshDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  threshLabel: {
+    color: COLORS.textSecondary,
+    fontSize: SIZES.sm,
+    flex: 1,
+  },
+  threshUnit: {
+    color: COLORS.textMuted,
+    fontSize: SIZES.xs,
+    marginRight: 8,
+  },
+  threshInput: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: COLORS.cardBorder,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    color: COLORS.textPrimary,
+    fontSize: SIZES.md,
+    width: 72,
+    textAlign: 'right',
   },
 });
 

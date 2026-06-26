@@ -14,6 +14,7 @@ import DashboardScreen from './src/screens/DashboardScreen';
 import TrendsScreen from './src/screens/TrendsScreen';
 import AlertsScreen from './src/screens/AlertsScreen';
 import AIChatScreen from './src/screens/AIChatScreen';
+import DeviceControlScreen from './src/screens/DeviceControlScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import { COLORS } from './src/theme';
 
@@ -90,6 +91,13 @@ export default function App() {
             component={AIChatScreen}
             options={{
               tabBarIcon: ({ focused }) => <TabIcon emoji="🎙️" focused={focused} />,
+            }}
+          />
+          <Tab.Screen
+            name="Device"
+            component={DeviceControlScreen}
+            options={{
+              tabBarIcon: ({ focused }) => <TabIcon emoji="🎛️" focused={focused} />,
             }}
           />
           <Tab.Screen

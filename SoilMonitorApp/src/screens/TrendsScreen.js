@@ -3,9 +3,10 @@
 // Uses simple SVG polylines — no heavy chart library needed.
 
 import React, { useState } from 'react';
-import { View, ScrollView, Text, TouchableOpacity, StyleSheet, Dimensions } from 'react-native';
+import { View, ScrollView, Text, TouchableOpacity, StyleSheet, Dimensions, Alert } from 'react-native';
 import Svg, { Polyline, Line, Text as SvgText } from 'react-native-svg';
 import { useMqtt } from '../services/mqtt';
+import { exportPDFReport } from '../utils/exportReport';
 import { COLORS, SIZES } from '../theme';
 
 const SCREEN_W = Dimensions.get('window').width - 64;
@@ -79,10 +80,24 @@ const MiniChart = ({ data, color, label, unit, maxOverride }) => {
 
 // ─── Trends Screen ────────────────────────────────────────────────────
 const TrendsScreen = () => {
-  const { history } = useMqtt();
+  const { history, alerts, latestReading } = useMqtt();
   const [range, setRange] = useState(50); // last N readings
+  const [exporting, setExporting] = useState(false);
 
   const sliced = history.slice(-range);
+
+  const handleExport = async () => {
+    if (history.length === 0) {
+      Alert.alert('No data', 'No readings available to export yet.');
+      return;
+    }
+    setExporting(true);
+    const result = await exportPDFReport({ history, alerts, latestReading });
+    setExporting(false);
+    if (!result.success) {
+      Alert.alert('Export failed', result.error ?? 'Unknown error');
+    }
+  };
 
   const ranges = [
     { label: 'Last 30', value: 30 },
@@ -93,7 +108,16 @@ const TrendsScreen = () => {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <Text style={styles.header}>📈 Trends</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.header}>📈 Trends</Text>
+        <TouchableOpacity
+          style={[styles.exportBtn, exporting && { opacity: 0.5 }]}
+          onPress={handleExport}
+          disabled={exporting}
+        >
+          <Text style={styles.exportBtnText}>{exporting ? '⏳ Exporting…' : '📤 Export PDF'}</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Range selector */}
       <View style={styles.rangeRow}>
@@ -136,7 +160,25 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontSize: SIZES.xxl,
     fontWeight: '800',
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 16,
+  },
+  exportBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: COLORS.accent + '18',
+    borderWidth: 1,
+    borderColor: COLORS.accent,
+  },
+  exportBtnText: {
+    color: COLORS.accent,
+    fontSize: SIZES.sm,
+    fontWeight: '600',
   },
   rangeRow: {
     flexDirection: 'row',
