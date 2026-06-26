@@ -395,6 +395,88 @@ void publishAlert(float cusumScore) {
 }
 
 // ==========================================
+// DIRECT FIREBASE PUBLISH
+// Used when cfg_enableMQTT = false.
+// Pushes readings directly to Firebase REST API via HTTPS.
+// No broker, no Node-RED, no same-WiFi requirement.
+// ==========================================
+void publishToFirebase(int n, int p, int k,
+                       float moist, float temp,
+                       String fertilityClass,
+                       float cusumScore, bool driftAlert) {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+  JsonDocument doc;
+#else
+  StaticJsonDocument<512> doc;
+#endif
+  doc["N"]         = n;
+  doc["P"]         = p;
+  doc["K"]         = k;
+  doc["moisture"]  = moist;
+  doc["temp"]      = temp;
+  doc["class"]     = fertilityClass;
+  doc["cusum"]     = cusumScore;
+  doc["drift"]     = driftAlert;
+  doc["timestamp"] = millis();
+
+  // Embed current config so the app's "Active Config" panel still updates
+  JsonObject cfg        = doc.createNestedObject("cfg");
+  cfg["enableNPK"]      = cfg_enableNPK;
+  cfg["enableTemp"]     = cfg_enableTemp;
+  cfg["enableMoisture"] = cfg_enableMoisture;
+  cfg["enableMQTT"]     = cfg_enableMQTT;
+  cfg["sampleInterval"] = cfg_sampleInterval;
+
+  char payload[512];
+  serializeJson(doc, payload);
+
+  WiFiClientSecure client;
+  client.setInsecure(); // Same as checkFirebaseConfig() — acceptable for IoT demo
+
+  HTTPClient http;
+
+  // 1. PUT /latest (overwrites — app reads this for live dashboard)
+  String latestUrl = String(FIREBASE_DB_URL) + "/soil/readings/latest.json";
+  http.begin(client, latestUrl);
+  http.addHeader("Content-Type", "application/json");
+  int code = http.PUT(payload);
+  Serial.printf("[Firebase Direct] PUT /latest → HTTP %d\n", code);
+  http.end();
+
+  // 2. POST /history (appends — app reads this for Trends chart)
+  String histUrl = String(FIREBASE_DB_URL) + "/soil/readings/history.json";
+  http.begin(client, histUrl);
+  http.addHeader("Content-Type", "application/json");
+  code = http.POST(payload);
+  Serial.printf("[Firebase Direct] POST /history → HTTP %d\n", code);
+  http.end();
+
+  // 3. POST alert if drift detected
+  if (driftAlert) {
+#if ARDUINOJSON_VERSION_MAJOR >= 7
+    JsonDocument alertDoc;
+#else
+    StaticJsonDocument<128> alertDoc;
+#endif
+    alertDoc["type"]      = "DEPLETION_DRIFT";
+    alertDoc["cusum"]     = cusumScore;
+    alertDoc["timestamp"] = millis();
+    alertDoc["message"]   = "Critical depletion trend detected — consider fertilizing";
+    char alertPayload[128];
+    serializeJson(alertDoc, alertPayload);
+
+    String alertUrl = String(FIREBASE_DB_URL) + "/soil/alerts.json";
+    http.begin(client, alertUrl);
+    http.addHeader("Content-Type", "application/json");
+    http.POST(alertPayload);
+    http.end();
+    Serial.println("[Firebase Direct] Alert posted.");
+  }
+}
+
+// ==========================================
 // SETUP
 // ==========================================
 void setup() {
@@ -543,13 +625,16 @@ void loop() {
     Serial.print(cusum_score, 2); Serial.print(",");
     Serial.println(drift_alert ? "DRIFT_ALERT" : "NORMAL");
 
-    // 7. Publish to MQTT (respects cfg_enableMQTT)
-    publishReadings(nitrogen, phosphorus, potassium, moisture, temperature,
-                    mlClass, cusum_score, drift_alert);
-
-    // 8. Publish drift alert
-    if (drift_alert && cfg_enableMQTT) {
-      publishAlert(cusum_score);
+    // 7. Publish — dual pipeline based on cfg_enableMQTT
+    if (cfg_enableMQTT) {
+      // MQTT pipeline: ESP32 → Mosquitto → Node-RED → Firebase
+      publishReadings(nitrogen, phosphorus, potassium, moisture, temperature,
+                      mlClass, cusum_score, drift_alert);
+      if (drift_alert) publishAlert(cusum_score);
+    } else {
+      // Direct Firebase pipeline: ESP32 → Firebase (no broker/Node-RED needed)
+      publishToFirebase(nitrogen, phosphorus, potassium, moisture, temperature,
+                        mlClass, cusum_score, drift_alert);
     }
   }
 }

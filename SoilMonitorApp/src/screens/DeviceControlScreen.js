@@ -16,7 +16,7 @@ const DEFAULT_CONFIG = {
   enableNPK:      true,
   enableTemp:     true,
   enableMoisture: true,
-  enableMQTT:     true,
+  enableMQTT:     false,   // Default: Direct Firebase — no laptop/broker needed
   sampleInterval: 30000,
   cusumK:         5.0,
   cusumH:         30.0,
@@ -167,6 +167,34 @@ const DeviceControlScreen = () => {
         )}
       </View>
 
+      {/* ── Pipeline Mode ─────────────────────────────────────────────── */}
+      <View style={styles.card}>
+        <Text style={styles.sectionLabel}>🔀 Data Pipeline</Text>
+        <ToggleRow
+          icon="📡"
+          label="MQTT Pipeline"
+          desc={config.enableMQTT
+            ? 'ESP32 → Mosquitto → Node-RED → Firebase'
+            : 'ESP32 → Firebase directly (no laptop needed)'}
+          value={config.enableMQTT}
+          onToggle={v => updateField('enableMQTT', v)}
+          color={config.enableMQTT ? '#f59e0b' : COLORS.accent}
+        />
+        {/* Visual pipeline badge */}
+        <View style={[
+          styles.pipelineBadge,
+          { backgroundColor: config.enableMQTT ? '#f59e0b18' : COLORS.accent + '18',
+            borderColor:      config.enableMQTT ? '#f59e0b44' : COLORS.accent + '44' },
+        ]}>
+          <Text style={[styles.pipelineBadgeText,
+            { color: config.enableMQTT ? '#f59e0b' : COLORS.accent }]}>
+            {config.enableMQTT
+              ? '⚡ MQTT mode — Mosquitto broker + Node-RED + same-WiFi required'
+              : '🌐 Direct mode — only internet needed, no broker, no laptop'}
+          </Text>
+        </View>
+      </View>
+
       {/* ── Sensor Toggles ────────────────────────────────────────────── */}
       <View style={styles.card}>
         <Text style={styles.sectionLabel}>🔬 Sensor Enables</Text>
@@ -195,15 +223,6 @@ const DeviceControlScreen = () => {
           value={config.enableMoisture}
           onToggle={v => updateField('enableMoisture', v)}
           color={COLORS.moisture}
-        />
-        <View style={styles.divider} />
-        <ToggleRow
-          icon="📡"
-          label="MQTT Publishing"
-          desc="Send readings to MQTT broker (Node-RED → Firebase)"
-          value={config.enableMQTT}
-          onToggle={v => updateField('enableMQTT', v)}
-          color={COLORS.accent}
         />
       </View>
 
@@ -288,24 +307,26 @@ const DeviceControlScreen = () => {
         </TouchableOpacity>
       </View>
 
-      {/* ── MQTT Broker Override ──────────────────────────────────────── */}
-      <View style={styles.card}>
-        <Text style={styles.sectionLabel}>🔌 MQTT Broker IP</Text>
-        <Text style={styles.hint}>
-          Laptop IP on the shared hotspot. Run{' '}
-          <Text style={{ color: COLORS.accent }}>ipconfig</Text> on the laptop to find it.
-        </Text>
-        <TextInput
-          style={[styles.numberInput, { width: '100%', marginTop: 10, textAlign: 'left' }]}
-          value={config.mqttBroker}
-          onChangeText={v => updateField('mqttBroker', v)}
-          placeholder="e.g. 192.168.1.42"
-          placeholderTextColor={COLORS.textMuted}
-          keyboardType="decimal-pad"
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-      </View>
+      {/* ── MQTT Broker IP — only shown when MQTT pipeline is ON ────── */}
+      {config.enableMQTT && (
+        <View style={styles.card}>
+          <Text style={styles.sectionLabel}>🔌 MQTT Broker IP</Text>
+          <Text style={styles.hint}>
+            Laptop IP on the shared hotspot. Run{' '}
+            <Text style={{ color: '#f59e0b' }}>ipconfig</Text> on the laptop to find it.
+          </Text>
+          <TextInput
+            style={[styles.numberInput, { width: '100%', marginTop: 10, textAlign: 'left' }]}
+            value={config.mqttBroker}
+            onChangeText={v => updateField('mqttBroker', v)}
+            placeholder="e.g. 192.168.1.42"
+            placeholderTextColor={COLORS.textMuted}
+            keyboardType="decimal-pad"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+      )}
 
       {/* ── Apply Button ──────────────────────────────────────────────── */}
       <TouchableOpacity
@@ -507,6 +528,18 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     fontSize: SIZES.xs,
     marginTop: 4,
+    lineHeight: 16,
+  },
+  // ── Pipeline badge ───────────────────────────────────────────────────
+  pipelineBadge: {
+    marginTop: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 10,
+  },
+  pipelineBadgeText: {
+    fontSize: SIZES.xs,
+    fontWeight: '600',
     lineHeight: 16,
   },
   // ── CUSUM reset ──────────────────────────────────────────────────────
