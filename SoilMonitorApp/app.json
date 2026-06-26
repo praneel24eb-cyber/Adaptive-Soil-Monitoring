@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Soil Monitor",
-    "slug": "SoilMonitorApp",
+    "slug": "soil-monitor",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -32,9 +32,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "77c8627d-8642-4bbb-aec7-9c53a444c226"
+        "projectId": "e6100f1d-20c7-42db-9b62-19396b542dee"
       }
     },
-    "owner": "praneelka"
+    "owner": "praneelka12"
   }
 }
